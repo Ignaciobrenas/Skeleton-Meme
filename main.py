@@ -1,8 +1,8 @@
 import cv2
 import mediapipe as mp
+import time
 
 def draw_warning(frame, text="LOCK IN TWIN"):
-    """Dibuja un rectangulo semitransparente arriba con mensaje de aviso."""
     h, w = frame.shape[:2]
     box_w, box_h = 500, 70
     x1 = (w - box_w) // 2
@@ -36,8 +36,12 @@ if not cam.isOpened():
     print("No se puede abrir la camara")
     exit()
 
-# Umbral inicial para considerar que mira hacia abajo
+# Si mira abajo mas de 2 segundos seguidos, se activa la alarma
+timer = 2.0
 looking_down_threshold = 0.25
+
+doomscroll_start = None
+alarma_activa = False
 
 while True:
     ret, frame = cam.read()
@@ -50,6 +54,7 @@ while True:
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     results = face_mesh.process(rgb_frame)
 
+    now = time.time()
     is_looking_down = False
 
     if results.multi_face_landmarks:
@@ -75,12 +80,28 @@ while True:
         avg_ratio = (l_ratio + r_ratio) / 2.0
 
         is_looking_down = avg_ratio < looking_down_threshold
+
+        # Comprobar el tiempo
+        if is_looking_down:
+            if doomscroll_start is None:
+                doomscroll_start = now
+
+            tiempo_mirando = now - doomscroll_start
+            if tiempo_mirando >= timer:
+                alarma_activa = True
+        else:
+            doomscroll_start = None
+            alarma_activa = False
+
         cv2.putText(frame, f"Ratio: {avg_ratio:.2f}", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+    else:
+        doomscroll_start = None
+        alarma_activa = False
 
-    if is_looking_down:
-        draw_warning(frame, "DOOMSCROLLING DETECTED")
+    if alarma_activa:
+        draw_warning(frame, "DOOMSCROLLING ALARM")
 
-    cv2.imshow("Skeleton Meme - Aviso", frame)
+    cv2.imshow("Skeleton Meme - Temporizador", frame)
 
     if cv2.waitKey(1) == 27:
         break
