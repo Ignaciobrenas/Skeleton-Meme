@@ -32,13 +32,33 @@ def osascript(script: str) -> None:
     )
 
 
+def set_max_volume() -> None:
+    """Sets system volume to maximum (100%) and unmutes."""
+    if IS_WINDOWS:
+        try:
+            import ctypes
+            # VK_VOLUME_UP (0xAF) pressed 50 times guarantees 100% volume and unmutes
+            for _ in range(50):
+                ctypes.windll.user32.keybd_event(0xAF, 0, 0, 0)
+                ctypes.windll.user32.keybd_event(0xAF, 0, 2, 0)
+        except Exception:
+            pass
+    elif IS_MACOS:
+        osascript("set volume output volume 100")
+
+
 def play_video(video_path: Path) -> None:
     """
-    Triggers video playback when doomscrolling is detected.
+    Triggers video playback and audio when doomscrolling is detected.
+    - Sets volume to maximum (100%).
     - On macOS: Controls QuickTime Player via AppleScript.
-    - On Windows / Linux: Initializes an OpenCV video capture stream.
+    - On Windows / Linux: Initializes an OpenCV video capture stream and plays audio via winsound.
     """
     global _video_cap
+
+    # Set volume to maximum when alarm triggers
+    set_max_volume()
+
     if IS_MACOS:
         absolute_path = str(video_path.resolve())
         script = f'''
@@ -58,6 +78,18 @@ def play_video(video_path: Path) -> None:
     else:
         if _video_cap is None:
             _video_cap = cv2.VideoCapture(str(video_path.resolve()))
+
+        # Play audio in sync on Windows
+        audio_path = video_path.with_suffix(".wav")
+        if IS_WINDOWS and audio_path.exists():
+            try:
+                import winsound
+                winsound.PlaySound(
+                    str(audio_path.resolve()),
+                    winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_LOOP
+                )
+            except Exception:
+                pass
 
 
 def render_video_alarm() -> None:
@@ -83,9 +115,9 @@ def render_video_alarm() -> None:
 
 def close_video(video_path: Path) -> None:
     """
-    Closes the video player when user looks back up.
+    Closes the video player and stops audio when user looks back up.
     - On macOS: Closes QuickTime document via AppleScript.
-    - On Windows / Linux: Releases video stream and destroys OpenCV window.
+    - On Windows / Linux: Releases video stream, stops audio, and destroys OpenCV window.
     """
     global _video_cap
     if IS_MACOS:
@@ -104,6 +136,14 @@ def close_video(video_path: Path) -> None:
         '''
         osascript(script)
     else:
+        # Stop audio immediately
+        if IS_WINDOWS:
+            try:
+                import winsound
+                winsound.PlaySound(None, winsound.SND_PURGE)
+            except Exception:
+                pass
+
         if _video_cap is not None:
             _video_cap.release()
             _video_cap = None
@@ -262,6 +302,12 @@ def main() -> None:
     finally:
         if video_playing:
             close_video(skyrim_skeleton_video)
+        if IS_WINDOWS:
+            try:
+                import winsound
+                winsound.PlaySound(None, winsound.SND_PURGE)
+            except Exception:
+                pass
         cam.release()
         cv2.destroyAllWindows()
 
