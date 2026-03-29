@@ -1,10 +1,16 @@
 import os
 import platform
 import subprocess
+import sys
 import time
 from pathlib import Path
 import cv2
 import mediapipe as mp
+
+# Ensure utf-8 encoding for console prints on Windows
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
 
 # Platform detection
 IS_MACOS = platform.system() == "Darwin"
@@ -164,7 +170,7 @@ def main() -> None:
         return
 
     print("==================================================")
-    print(" 💀 Skeleton Meme - Doomscroll Stopper Active! 💀 ")
+    print(" [!] Skeleton Meme - Doomscroll Stopper Active! [!]")
     print(" Tracking iris movement. Press ESC in window to exit.")
     print("==================================================")
 
