@@ -1,6 +1,90 @@
+import os
+import platform
+import subprocess
+import time
+from pathlib import Path
 import cv2
 import mediapipe as mp
-import time
+
+IS_MACOS = platform.system() == "Darwin"
+_video_cap = None
+
+def osascript(script: str) -> None:
+    if not IS_MACOS:
+        return
+    subprocess.run(
+        ["osascript", "-e", script],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+
+def play_video(video_path: Path) -> None:
+    global _video_cap
+    if IS_MACOS:
+        absolute_path = str(video_path.resolve())
+        script = f'''
+        tell application "QuickTime Player"
+            activate
+            set doc to open POSIX file "{absolute_path}"
+            tell doc
+                play
+                set presenting to false
+                tell front window
+                    set bounds to {{25, 45, 415, 825}}
+                end tell
+            end tell
+        end tell
+        '''
+        osascript(script)
+    else:
+        # En Windows abrimos el video con OpenCV para no necesitar programas externos
+        if _video_cap is None:
+            _video_cap = cv2.VideoCapture(str(video_path.resolve()))
+
+def render_video_alarm() -> None:
+    global _video_cap
+    if IS_MACOS or _video_cap is None:
+        return
+
+    ret, vid_frame = _video_cap.read()
+    if not ret or vid_frame is None:
+        # Repetir el video en bucle
+        _video_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        ret, vid_frame = _video_cap.read()
+
+    if ret and vid_frame is not None:
+        h, w = vid_frame.shape[:2]
+        target_w = 360
+        target_h = int(h * (target_w / w))
+        resized = cv2.resize(vid_frame, (target_w, target_h))
+        cv2.imshow("Doomscroll Alarm - Skyrim Skeleton", resized)
+
+def close_video(video_path: Path) -> None:
+    global _video_cap
+    if IS_MACOS:
+        video_name = video_path.name
+        script = f'''
+        tell application "QuickTime Player"
+            repeat with d in documents
+                try
+                    if (name of d) is "{video_name}" then
+                        stop d
+                        close d saving no
+                    end if
+                end try
+            end repeat
+        end tell
+        '''
+        osascript(script)
+    else:
+        if _video_cap is not None:
+            _video_cap.release()
+            _video_cap = None
+        try:
+            cv2.destroyWindow("Doomscroll Alarm - Skyrim Skeleton")
+        except cv2.error:
+            pass
 
 def draw_warning(frame, text="LOCK IN TWIN"):
     h, w = frame.shape[:2]
@@ -27,6 +111,11 @@ def draw_warning(frame, text="LOCK IN TWIN"):
         cv2.LINE_AA,
     )
 
+skyrim_skeleton_video = Path("./assets/skyrim-skeleton.mp4").resolve()
+if not skyrim_skeleton_video.exists():
+    print(f"No se encuentra el video en {skyrim_skeleton_video}")
+    exit()
+
 mp_face_mesh = mp.solutions.face_mesh
 face_mesh = mp_face_mesh.FaceMesh(refine_landmarks=True)
 
@@ -36,12 +125,11 @@ if not cam.isOpened():
     print("No se puede abrir la camara")
     exit()
 
-# Si mira abajo mas de 2 segundos seguidos, se activa la alarma
 timer = 2.0
 looking_down_threshold = 0.25
 
 doomscroll_start = None
-alarma_activa = False
+video_playing = False
 
 while True:
     ret, frame = cam.read()
@@ -81,30 +169,39 @@ while True:
 
         is_looking_down = avg_ratio < looking_down_threshold
 
-        # Comprobar el tiempo
         if is_looking_down:
             if doomscroll_start is None:
                 doomscroll_start = now
 
             tiempo_mirando = now - doomscroll_start
             if tiempo_mirando >= timer:
-                alarma_activa = True
+                if not video_playing:
+                    play_video(skyrim_skeleton_video)
+                    video_playing = True
         else:
             doomscroll_start = None
-            alarma_activa = False
+            if video_playing:
+                close_video(skyrim_skeleton_video)
+                video_playing = False
 
         cv2.putText(frame, f"Ratio: {avg_ratio:.2f}", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
     else:
         doomscroll_start = None
-        alarma_activa = False
+        if video_playing:
+            close_video(skyrim_skeleton_video)
+            video_playing = False
 
-    if alarma_activa:
+    if video_playing:
+        render_video_alarm()
         draw_warning(frame, "DOOMSCROLLING ALARM")
 
-    cv2.imshow("Skeleton Meme - Temporizador", frame)
+    cv2.imshow("Skeleton Meme", frame)
 
     if cv2.waitKey(1) == 27:
         break
+
+if video_playing:
+    close_video(skyrim_skeleton_video)
 
 cam.release()
 cv2.destroyAllWindows()
