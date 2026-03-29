@@ -6,10 +6,16 @@ from pathlib import Path
 import cv2
 import mediapipe as mp
 
+# Platform detection
 IS_MACOS = platform.system() == "Darwin"
+IS_WINDOWS = platform.system() == "Windows"
+
+# Global video capture object for Windows / Linux playback
 _video_cap = None
 
+
 def osascript(script: str) -> None:
+    """Executes an AppleScript command on macOS."""
     if not IS_MACOS:
         return
     subprocess.run(
@@ -19,7 +25,13 @@ def osascript(script: str) -> None:
         check=False,
     )
 
+
 def play_video(video_path: Path) -> None:
+    """
+    Triggers video playback when doomscrolling is detected.
+    - On macOS: Controls QuickTime Player via AppleScript.
+    - On Windows / Linux: Initializes an OpenCV video capture stream.
+    """
     global _video_cap
     if IS_MACOS:
         absolute_path = str(video_path.resolve())
@@ -38,29 +50,37 @@ def play_video(video_path: Path) -> None:
         '''
         osascript(script)
     else:
-        # En Windows abrimos el video con OpenCV para no necesitar programas externos
         if _video_cap is None:
             _video_cap = cv2.VideoCapture(str(video_path.resolve()))
 
+
 def render_video_alarm() -> None:
+    """Renders the video frame-by-frame in an OpenCV window on Windows/Linux."""
     global _video_cap
     if IS_MACOS or _video_cap is None:
         return
 
     ret, vid_frame = _video_cap.read()
     if not ret or vid_frame is None:
-        # Repetir el video en bucle
+        # Loop video from the beginning
         _video_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
         ret, vid_frame = _video_cap.read()
 
     if ret and vid_frame is not None:
+        # Scale to a neat phone-like portrait dimension (360x640)
         h, w = vid_frame.shape[:2]
         target_w = 360
         target_h = int(h * (target_w / w))
         resized = cv2.resize(vid_frame, (target_w, target_h))
         cv2.imshow("Doomscroll Alarm - Skyrim Skeleton", resized)
 
+
 def close_video(video_path: Path) -> None:
+    """
+    Closes the video player when user looks back up.
+    - On macOS: Closes QuickTime document via AppleScript.
+    - On Windows / Linux: Releases video stream and destroys OpenCV window.
+    """
     global _video_cap
     if IS_MACOS:
         video_name = video_path.name
@@ -86,7 +106,9 @@ def close_video(video_path: Path) -> None:
         except cv2.error:
             pass
 
-def draw_warning(frame, text="LOCK IN TWIN"):
+
+def draw_warning(frame, text: str = "LOCK IN TWIN") -> None:
+    """Draws a stylized translucent cyberpunk-themed warning banner on top of the webcam feed."""
     h, w = frame.shape[:2]
     box_w, box_h = 500, 70
     x1 = (w - box_w) // 2
@@ -111,97 +133,132 @@ def draw_warning(frame, text="LOCK IN TWIN"):
         cv2.LINE_AA,
     )
 
-skyrim_skeleton_video = Path("./assets/skyrim-skeleton.mp4").resolve()
-if not skyrim_skeleton_video.exists():
-    print(f"No se encuentra el video en {skyrim_skeleton_video}")
-    exit()
 
-mp_face_mesh = mp.solutions.face_mesh
-face_mesh = mp_face_mesh.FaceMesh(refine_landmarks=True)
+def main() -> None:
+    """Main computer vision loop tracking eyes and triggering the meme alarm."""
+    # Threshold & timing settings
+    timer = 2.0                    # Seconds user must look down continuously before alarm fires
+    looking_down_threshold = 0.25  # Sensitivity: iris ratio below this triggers looking down state
+    debounce_threshold = 0.45      # Hysteresis: iris ratio above this required to deactivate alarm
 
-cam = cv2.VideoCapture(0)
+    # Validate asset
+    assets_dir = Path(__file__).resolve().parent / "assets"
+    skyrim_skeleton_video = assets_dir / "skyrim-skeleton.mp4"
+    if not skyrim_skeleton_video.exists():
+        print(f"Error: Could not locate video asset at {skyrim_skeleton_video}")
+        return
 
-if not cam.isOpened():
-    print("No se puede abrir la camara")
-    exit()
+    # Initialize MediaPipe Face Mesh model with iris landmarks enabled
+    mp_face_mesh = mp.solutions.face_mesh
+    face_mesh = mp_face_mesh.FaceMesh(
+        max_num_faces=1,
+        refine_landmarks=True,
+        min_detection_confidence=0.5,
+        min_tracking_confidence=0.5,
+    )
 
-timer = 2.0
-looking_down_threshold = 0.25
+    # Open webcam
+    cam = cv2.VideoCapture(0)
+    if not cam.isOpened():
+        print("Error: Could not access webcam. Please check your camera permissions.")
+        return
 
-doomscroll_start = None
-video_playing = False
+    print("==================================================")
+    print(" 💀 Skeleton Meme - Doomscroll Stopper Active! 💀 ")
+    print(" Tracking iris movement. Press ESC in window to exit.")
+    print("==================================================")
 
-while True:
-    ret, frame = cam.read()
-    if not ret:
-        break
+    doomscroll_start_time = None
+    video_playing = False
 
-    frame = cv2.flip(frame, 1)
-    height, width, _ = frame.shape
+    try:
+        while True:
+            ret, frame = cam.read()
+            if not ret:
+                continue
 
-    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    results = face_mesh.process(rgb_frame)
+            # Mirror webcam feed horizontally for intuitive user experience
+            frame = cv2.flip(frame, 1)
+            height, width, _ = frame.shape
 
-    now = time.time()
-    is_looking_down = False
+            # MediaPipe requires RGB format
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            processed = face_mesh.process(rgb_frame)
+            face_landmark_points = processed.multi_face_landmarks
 
-    if results.multi_face_landmarks:
-        landmarks = results.multi_face_landmarks[0].landmark
+            current_time = time.time()
 
-        left_eye = [landmarks[145], landmarks[159]]
-        right_eye = [landmarks[374], landmarks[386]]
+            if face_landmark_points:
+                landmarks = face_landmark_points[0].landmark
 
-        lx = int((left_eye[0].x + left_eye[1].x) / 2 * width)
-        ly = int((left_eye[0].y + left_eye[1].y) / 2 * height)
-        rx = int((right_eye[0].x + right_eye[1].x) / 2 * width)
-        ry = int((right_eye[0].y + right_eye[1].y) / 2 * height)
+                # Eye corner reference landmarks
+                # Left eye: lower eyelid (145), upper eyelid (159)
+                # Right eye: lower eyelid (374), upper eyelid (386)
+                left_eye = [landmarks[145], landmarks[159]]
+                right_eye = [landmarks[374], landmarks[386]]
 
-        box_size = 45
-        cv2.rectangle(frame, (lx - box_size, ly - box_size), (lx + box_size, ly + box_size), (10, 255, 0), 2)
-        cv2.rectangle(frame, (rx - box_size, ry - box_size), (rx + box_size, ry + box_size), (10, 255, 0), 2)
+                # Draw green eye tracking bounding boxes
+                lx = int((left_eye[0].x + left_eye[1].x) / 2 * width)
+                ly = int((left_eye[0].y + left_eye[1].y) / 2 * height)
+                rx = int((right_eye[0].x + right_eye[1].x) / 2 * width)
+                ry = int((right_eye[0].y + right_eye[1].y) / 2 * height)
 
-        l_iris = landmarks[468]
-        r_iris = landmarks[473]
+                box_size = 45
+                cv2.rectangle(frame, (lx - box_size, ly - box_size), (lx + box_size, ly + box_size), (10, 255, 0), 2)
+                cv2.rectangle(frame, (rx - box_size, ry - box_size), (rx + box_size, ry + box_size), (10, 255, 0), 2)
 
-        l_ratio = (l_iris.y - left_eye[1].y) / (left_eye[0].y - left_eye[1].y + 1e-6)
-        r_ratio = (r_iris.y - right_eye[1].y) / (right_eye[0].y - right_eye[1].y + 1e-6)
-        avg_ratio = (l_ratio + r_ratio) / 2.0
+                # Irises: Left iris center (468), Right iris center (473)
+                l_iris = landmarks[468]
+                r_iris = landmarks[473]
 
-        is_looking_down = avg_ratio < looking_down_threshold
+                # Vertical iris ratio: relative position between upper and lower eyelids
+                l_ratio = (l_iris.y - left_eye[1].y) / (left_eye[0].y - left_eye[1].y + 1e-6)
+                r_ratio = (r_iris.y - right_eye[1].y) / (right_eye[0].y - right_eye[1].y + 1e-6)
+                avg_ratio = (l_ratio + r_ratio) / 2.0
 
-        if is_looking_down:
-            if doomscroll_start is None:
-                doomscroll_start = now
+                # Determine gaze state with hysteresis debouncing
+                if video_playing:
+                    is_looking_down = avg_ratio < debounce_threshold
+                else:
+                    is_looking_down = avg_ratio < looking_down_threshold
 
-            tiempo_mirando = now - doomscroll_start
-            if tiempo_mirando >= timer:
-                if not video_playing:
-                    play_video(skyrim_skeleton_video)
-                    video_playing = True
-        else:
-            doomscroll_start = None
+                # Handle timer and triggering
+                if is_looking_down:
+                    if doomscroll_start_time is None:
+                        doomscroll_start_time = current_time
+
+                    if (current_time - doomscroll_start_time) >= timer:
+                        if not video_playing:
+                            play_video(skyrim_skeleton_video)
+                            video_playing = True
+                else:
+                    doomscroll_start_time = None
+                    if video_playing:
+                        close_video(skyrim_skeleton_video)
+                        video_playing = False
+            else:
+                # No face in frame - reset timer and close video
+                doomscroll_start_time = None
+                if video_playing:
+                    close_video(skyrim_skeleton_video)
+                    video_playing = False
+
+            # Display warning HUD and render video frame if triggered
             if video_playing:
-                close_video(skyrim_skeleton_video)
-                video_playing = False
+                render_video_alarm()
+                draw_warning(frame, "DOOMSCROLLING ALARM")
 
-        cv2.putText(frame, f"Ratio: {avg_ratio:.2f}", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-    else:
-        doomscroll_start = None
+            cv2.imshow("Skeleton Meme - Lock In", frame)
+            key = cv2.waitKey(1)
+            if key == 27:  # ESC key
+                break
+
+    finally:
         if video_playing:
             close_video(skyrim_skeleton_video)
-            video_playing = False
+        cam.release()
+        cv2.destroyAllWindows()
 
-    if video_playing:
-        render_video_alarm()
-        draw_warning(frame, "DOOMSCROLLING ALARM")
 
-    cv2.imshow("Skeleton Meme", frame)
-
-    if cv2.waitKey(1) == 27:
-        break
-
-if video_playing:
-    close_video(skyrim_skeleton_video)
-
-cam.release()
-cv2.destroyAllWindows()
+if __name__ == "__main__":
+    main()
