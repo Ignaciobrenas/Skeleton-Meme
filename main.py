@@ -299,6 +299,16 @@ def main() -> None:
             if key == 27:  # ESC key
                 break
 
+            # Cerrar el programa si el usuario hace clic en la 'X' de la ventana principal
+            if cv2.getWindowProperty("Skeleton Meme - Lock In", cv2.WND_PROP_VISIBLE) < 1:
+                break
+
+            # Si el usuario cierra con la 'X' la ventana del video de la alarma
+            if video_playing and not IS_MACOS:
+                if cv2.getWindowProperty("Doomscroll Alarm - Skyrim Skeleton", cv2.WND_PROP_VISIBLE) < 1:
+                    close_video(skyrim_skeleton_video)
+                    video_playing = False
+
     finally:
         if video_playing:
             close_video(skyrim_skeleton_video)
